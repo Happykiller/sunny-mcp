@@ -22,6 +22,15 @@ export interface SessionOptions {
   password?: string;
   /** Jeton fixé d'avance : court-circuite toute connexion. */
   token?: string;
+  /**
+   * Fournit le jeton à la demande, au lieu de le négocier par login.
+   *
+   * C'est ce que le transport HTTP emploie : le jeton s'obtient alors par
+   * échange (RFC 8693) à partir de celui de l'appelant, et non par un couple
+   * login/mot de passe. Le serveur MCP ne détient ainsi aucun identifiant
+   * d'utilisateur, et chaque action reste attribuée à qui l'a demandée.
+   */
+  obtenirJeton?: () => Promise<string>;
   cache?: TokenCache;
   /** En-tête par lequel le serveur réémet un jeton frais à chaque requête
    *  authentifiée (`seguri-refresh-token` chez Siguri). L'adopter évite de
@@ -70,6 +79,11 @@ export class GraphQLSession {
     if (this.opts.token) return this.opts.token;
     if (this.token) return this.token;
 
+    if (this.opts.obtenirJeton) {
+      this.token = await this.opts.obtenirJeton();
+      return this.token;
+    }
+
     const encache = this.opts.cache?.lire();
     if (encache) {
       this.token = encache;
@@ -79,6 +93,10 @@ export class GraphQLSession {
   }
 
   async connexion(): Promise<string> {
+    if (this.opts.obtenirJeton) {
+      this.token = await this.opts.obtenirJeton();
+      return this.token;
+    }
     if (!this.opts.login || !this.opts.password) {
       throw new GraphQLCallError('MISSING_CREDENTIALS', {
         hint: "Ni jeton fixé ni couple login/mot de passe n'a été fourni.",

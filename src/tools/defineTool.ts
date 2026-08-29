@@ -10,9 +10,26 @@ import type { Logger } from '../logger.js';
 import type { Target } from '../safety/target.js';
 import type { GraphQLSession } from '../graphql/session.js';
 
+/**
+ * Identité de l'appelant, quand le transport en porte une.
+ *
+ * Absente en stdio : le serveur y agit sous une seule identité, celle de son
+ * environnement. Présente en HTTP, où chaque requête arrive avec son jeton —
+ * c'est ce qui permet d'attribuer une action à la personne qui l'a demandée
+ * plutôt qu'à un compte de service partagé.
+ */
+export interface Appelant {
+  /** Sujet du jeton : l'identifiant du compte au nom duquel on agit. */
+  sub?: string;
+  scopes: string[];
+  /** Le jeton lui-même, à présenter pour en obtenir un autre en aval. */
+  token: string;
+}
+
 export interface ToolContext {
   gql: GraphQLSession;
   target: Target;
+  appelant?: Appelant;
   /** Interrupteur d'écriture, indépendant de la cible : il faut deux erreurs
    *  pour écrire en production, pas une. */
   allowWrites: boolean;
