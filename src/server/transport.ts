@@ -3,6 +3,7 @@
 // `stdio` pour un client comme Claude Code, `http` pour le débogage manuel et un
 // éventuel déploiement multi-client. Gabarit repris de kalifa.
 import express from 'express';
+import type { Server } from 'node:http';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -37,17 +38,23 @@ export interface StartOptions {
   };
 }
 
+/**
+ * Démarre le transport et rend le serveur HTTP, quand il y en a un.
+ *
+ * Le rendre n'est pas une commodité : un serveur qu'on ne peut pas arrêter est
+ * intestable, et il empêche tout processus qui l'embarque de se terminer.
+ */
 export async function startTransport(
   server: McpServer,
   opts: StartOptions = {},
-): Promise<void> {
+): Promise<Server | undefined> {
   const logger = opts.logger ?? silentLogger;
   const kind = opts.transport ?? 'stdio';
 
   if (kind === 'stdio') {
     await server.connect(new StdioServerTransport());
     logger.info('transport stdio prêt');
-    return;
+    return undefined;
   }
 
   const app = express();
@@ -58,7 +65,11 @@ export async function startTransport(
     // Le document de découverte reste PUBLIC : c'est par lui qu'un client non
     // authentifié apprend où aller s'authentifier. L'exiger authentifié
     // rendrait la découverte impossible.
-    app.get(
+    // `app.use` et non `app.get` : le SDK rend un Router dont la route est `/`.
+    // Monté en `get`, la requête lui parvient avec son chemin entier, sa route
+    // ne correspond jamais, et le document répond 404 — en désignant pourtant
+    // sa propre adresse dans l'en-tête `WWW-Authenticate` des refus.
+    app.use(
       CHEMIN_METADONNEES,
       metadataHandler(metadonneesRessource(protection.metadata)),
     );
@@ -95,10 +106,18 @@ export async function startTransport(
   app.delete('/mcp', ...garde, relais);
 
   const port = opts.port ?? 3000;
-  await new Promise<void>((resolve) => {
-    app.listen(port, () => {
+  return new Promise<Server>((resolve) => {
+    const httpServer = app.listen(port, () => {
       logger.info(`transport http prêt sur :${port}/mcp`);
-      resolve();
+      resolve(httpServer);
+    });
+
+    // Fermer le serveur HTTP doit tout emporter. Sans cela, le transport et le
+    // serveur MCP gardent des ressources que l'appelant n'a aucun moyen
+    // d'atteindre — et le processus qui les embarque ne se termine jamais.
+    httpServer.on('close', () => {
+      void transport.close();
+      void server.close();
     });
   });
 }
