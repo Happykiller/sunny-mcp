@@ -90,3 +90,74 @@ describe('transport http protégé', () => {
     assert.equal(suivi.status, 200);
   });
 });
+
+/**
+ * En mode sans état, le transport ne se partage pas entre requêtes.
+ *
+ * Un transport unique accepte la PREMIÈRE initialisation puis rejette tout le
+ * reste en 500, sans message ni journal. Le défaut ne se voit qu'au deuxième
+ * appel — d'où ce cas, qui en enchaîne deux.
+ */
+describe('transport http sans état', () => {
+  let httpServer: Server;
+  let base: string;
+
+  const initialize = (n: number) =>
+    fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: n,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'essai', version: '0' },
+        },
+      }),
+    });
+
+  before(async () => {
+    // Une FABRIQUE : c'est ce qui permet un serveur neuf par requête.
+    const fabrique = () =>
+      createMcpServer({
+        name: 'essai',
+        version: '0',
+        catalog: [],
+        ctx: {
+          gql: {} as never,
+          target: { url: 'http://x.test', host: 'x.test', isProd: false },
+          allowWrites: false,
+          logger: silentLogger,
+        },
+      });
+
+    httpServer = (await startTransport(fabrique, {
+      transport: 'http',
+      port: 19098,
+      logger: silentLogger,
+    }))!;
+    base = 'http://127.0.0.1:19098';
+  });
+
+  after(async () => {
+    httpServer.closeAllConnections?.();
+    await new Promise<void>((r) => httpServer.close(() => r()));
+  });
+
+  test('deux requêtes successives aboutissent toutes les deux', async () => {
+    const premiere = await initialize(1);
+    assert.equal(premiere.status, 200, 'la première initialisation doit passer');
+
+    const seconde = await initialize(2);
+    assert.equal(
+      seconde.status,
+      200,
+      'la seconde échouait en 500 quand le transport était partagé',
+    );
+  });
+});

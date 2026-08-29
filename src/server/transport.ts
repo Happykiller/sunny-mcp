@@ -45,13 +45,15 @@ export interface StartOptions {
  * intestable, et il empêche tout processus qui l'embarque de se terminer.
  */
 export async function startTransport(
-  server: McpServer,
+  serveur: McpServer | (() => McpServer),
   opts: StartOptions = {},
 ): Promise<Server | undefined> {
   const logger = opts.logger ?? silentLogger;
   const kind = opts.transport ?? 'stdio';
 
   if (kind === 'stdio') {
+    const server =
+      typeof serveur === 'function' ? serveur() : serveur;
     await server.connect(new StdioServerTransport());
     logger.info('transport stdio prêt');
     return undefined;
@@ -76,14 +78,28 @@ export async function startTransport(
     logger.info(`métadonnées de ressource sur ${CHEMIN_METADONNEES}`);
   }
 
-  // `sessionIdGenerator: undefined` = mode sans état : aucune session à tenir
+  // Mode SANS ÉTAT : `sessionIdGenerator: undefined`. Aucune session n'est tenue
   // côté serveur, donc rien à répliquer si l'on déploie plusieurs instances.
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
-  await server.connect(transport);
+  //
+  // La conséquence, qui n'a rien d'évident : le transport ne se PARTAGE PAS
+  // entre requêtes. Un transport unique accepte la première initialisation puis
+  // rejette tout le reste en 500, sans message. Il faut donc en créer un — et un
+  // serveur — par requête, puis les refermer.
+  const fabriqueServeur =
+    typeof serveur === 'function' ? serveur : () => serveur;
 
   const relais = async (req: express.Request, res: express.Response) => {
+    const instance = fabriqueServeur();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    // Refermer sur la fin de la réponse : sans cela chaque requête laisserait
+    // un serveur et un transport derrière elle.
+    res.on('close', () => {
+      void transport.close();
+      void instance.close();
+    });
+    await instance.connect(transport);
     await transport.handleRequest(req, res, req.body);
   };
 
@@ -115,9 +131,5 @@ export async function startTransport(
     // Fermer le serveur HTTP doit tout emporter. Sans cela, le transport et le
     // serveur MCP gardent des ressources que l'appelant n'a aucun moyen
     // d'atteindre — et le processus qui les embarque ne se termine jamais.
-    httpServer.on('close', () => {
-      void transport.close();
-      void server.close();
-    });
   });
 }
