@@ -259,4 +259,38 @@ describe("is_prod dans le contrat de réponse", () => {
     assert.doesNotMatch(descriptionDe(cible(false)), /PRODUCTION/);
     assert.doesNotMatch(descriptionDe(cible(undefined)), /PRODUCTION/);
   });
+
+  /**
+   * Le transport http résout son contexte PAR REQUÊTE, par une fabrique — les
+   * descriptions, elles, sont figées à l'enregistrement. La cible était donc
+   * inconnue à ce moment-là, et les outils destructifs perdaient leur
+   * avertissement sur le seul transport où plusieurs personnes agissent à
+   * distance. Constaté en recette, drapeau de production pourtant posé.
+   */
+  test("préfixe aussi quand le contexte est une fabrique", () => {
+    const { outil } = fabriqueEcriture();
+    const ctx = cible(true);
+    const lire = (opts: any): string => {
+      let vue = "";
+      const proto: any = Object.getPrototypeOf(
+        createMcpServer({ name: "t", version: "0", catalog: [], ctx }),
+      );
+      const original = proto.registerTool;
+      proto.registerTool = function (n: string, cfg: any, cb: Function) {
+        vue = cfg.description;
+        return original.call(this, n, cfg, cb);
+      };
+      try {
+        createMcpServer({ name: "t", version: "0", catalog: [outil], ...opts });
+      } finally {
+        proto.registerTool = original;
+      }
+      return vue;
+    };
+
+    // Une fabrique SANS cible déclarée ne peut rien affirmer.
+    assert.doesNotMatch(lire({ ctx: () => ctx }), /PRODUCTION/);
+    // Avec la cible fournie à part, l'avertissement revient.
+    assert.match(lire({ ctx: () => ctx, target: ctx.target }), /PRODUCTION/);
+  });
 });

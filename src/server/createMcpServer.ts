@@ -8,6 +8,7 @@ import type {
   ToolCatalog,
   ToolContext,
 } from "../tools/defineTool.js";
+import type { Target } from "../safety/target.js";
 
 /**
  * Contexte des outils : une valeur fixe, ou une fabrique appelée à CHAQUE
@@ -26,6 +27,16 @@ export interface CreateServerOptions {
   version: string;
   catalog: ToolCatalog;
   ctx: ToolContext | FabriqueContexte;
+  /**
+   * Cible visée, quand `ctx` est une FABRIQUE.
+   *
+   * Les descriptions sont figées à l'enregistrement, alors qu'une fabrique ne
+   * rend son contexte qu'à l'arrivée d'une requête : la cible était donc
+   * inconnue au moment de décider du préfixe, et les outils destructifs
+   * perdaient silencieusement leur avertissement `[PRODUCTION]` — sur le seul
+   * transport où plusieurs personnes agissent à distance. Constaté en recette.
+   */
+  target?: Target;
 }
 
 /** Préfixe apposé en clair sur les outils écrivant en production : la seule
@@ -41,9 +52,13 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
   ): Promise<ToolContext> =>
     typeof opts.ctx === "function" ? opts.ctx(appelant) : opts.ctx;
 
-  // La cible et l'interrupteur d'écriture ne dépendent pas de l'appelant : on
-  // les lit une fois, pour décider des descriptions à l'enregistrement.
-  const ctx = typeof opts.ctx === "function" ? undefined : opts.ctx;
+  // La cible ne dépend pas de l'appelant : on la lit une fois, pour décider des
+  // descriptions à l'enregistrement. Avec une fabrique, elle doit être fournie
+  // à part — sans quoi le préfixe ne serait jamais posé.
+  const cible: Target | undefined =
+    typeof opts.ctx === "function"
+      ? opts.target
+      : (opts.target ?? opts.ctx.target);
 
   const noms = new Set<string>();
   for (const tool of catalog) {
@@ -53,7 +68,7 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
     noms.add(tool.name);
 
     const description =
-      ctx?.target.isProd === true && tool.requiresWrite
+      cible?.isProd === true && tool.requiresWrite
         ? PREFIXE_PROD + tool.description
         : tool.description;
 
