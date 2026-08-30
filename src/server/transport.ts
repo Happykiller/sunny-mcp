@@ -2,22 +2,26 @@
 // Deux transports pour un même serveur, choisis par variable d'environnement :
 // `stdio` pour un client comme Claude Code, `http` pour le débogage manuel et un
 // éventuel déploiement multi-client. Gabarit repris de kalifa.
-import express from 'express';
-import type { Server } from 'node:http';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import express from "express";
+import type { Server } from "node:http";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { metadataHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/metadata.js';
-import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import type { OAuthTokenVerifier } from '@modelcontextprotocol/sdk/server/auth/provider.js';
+import { metadataHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/metadata.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 
-import type { Logger } from '../logger.js';
-import { silentLogger } from '../logger.js';
-import { CHEMIN_METADONNEES, metadonneesRessource } from '../resource/metadata.js';
-import type { OptionsMetadonnees } from '../resource/metadata.js';
+import type { Logger } from "../logger.js";
+import { silentLogger } from "../logger.js";
+import {
+  cheminsMetadonnees,
+  metadonneesRessource,
+  urlMetadonnees,
+} from "../resource/metadata.js";
+import type { OptionsMetadonnees } from "../resource/metadata.js";
 
-export type TransportKind = 'stdio' | 'http';
+export type TransportKind = "stdio" | "http";
 
 export interface StartOptions {
   transport?: TransportKind;
@@ -49,18 +53,17 @@ export async function startTransport(
   opts: StartOptions = {},
 ): Promise<Server | undefined> {
   const logger = opts.logger ?? silentLogger;
-  const kind = opts.transport ?? 'stdio';
+  const kind = opts.transport ?? "stdio";
 
-  if (kind === 'stdio') {
-    const server =
-      typeof serveur === 'function' ? serveur() : serveur;
+  if (kind === "stdio") {
+    const server = typeof serveur === "function" ? serveur() : serveur;
     await server.connect(new StdioServerTransport());
-    logger.info('transport stdio prêt');
+    logger.info("transport stdio prêt");
     return undefined;
   }
 
   const app = express();
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: "4mb" }));
 
   const protection = opts.resourceServer;
   if (protection) {
@@ -71,11 +74,12 @@ export async function startTransport(
     // Monté en `get`, la requête lui parvient avec son chemin entier, sa route
     // ne correspond jamais, et le document répond 404 — en désignant pourtant
     // sa propre adresse dans l'en-tête `WWW-Authenticate` des refus.
-    app.use(
-      CHEMIN_METADONNEES,
-      metadataHandler(metadonneesRessource(protection.metadata)),
-    );
-    logger.info(`métadonnées de ressource sur ${CHEMIN_METADONNEES}`);
+    const document = metadonneesRessource(protection.metadata);
+    const chemins = cheminsMetadonnees(protection.metadata.resource);
+    for (const chemin of chemins) {
+      app.use(chemin, metadataHandler(document));
+    }
+    logger.info(`métadonnées de ressource sur ${chemins.join(" et ")}`);
   }
 
   // Mode SANS ÉTAT : `sessionIdGenerator: undefined`. Aucune session n'est tenue
@@ -86,7 +90,7 @@ export async function startTransport(
   // rejette tout le reste en 500, sans message. Il faut donc en créer un — et un
   // serveur — par requête, puis les refermer.
   const fabriqueServeur =
-    typeof serveur === 'function' ? serveur : () => serveur;
+    typeof serveur === "function" ? serveur : () => serveur;
 
   const relais = async (req: express.Request, res: express.Response) => {
     const instance = fabriqueServeur();
@@ -95,7 +99,7 @@ export async function startTransport(
     });
     // Refermer sur la fin de la réponse : sans cela chaque requête laisserait
     // un serveur et un transport derrière elle.
-    res.on('close', () => {
+    res.on("close", () => {
       void transport.close();
       void instance.close();
     });
@@ -112,14 +116,14 @@ export async function startTransport(
         requireBearerAuth({
           verifier: protection.verifier,
           requiredScopes: protection.requiredScopes,
-          resourceMetadataUrl: `${protection.metadata.resource.replace(/\/mcp$/, '')}${CHEMIN_METADONNEES}`,
+          resourceMetadataUrl: urlMetadonnees(protection.metadata.resource),
         }),
       ]
     : [];
 
-  app.post('/mcp', ...garde, relais);
-  app.get('/mcp', ...garde, relais);
-  app.delete('/mcp', ...garde, relais);
+  app.post("/mcp", ...garde, relais);
+  app.get("/mcp", ...garde, relais);
+  app.delete("/mcp", ...garde, relais);
 
   const port = opts.port ?? 3000;
   return new Promise<Server>((resolve) => {

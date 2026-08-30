@@ -1,10 +1,10 @@
-import { test, describe, before, after } from 'node:test';
-import assert from 'node:assert/strict';
-import type { Server } from 'node:http';
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert/strict";
+import type { Server } from "node:http";
 
-import { createMcpServer } from './createMcpServer.js';
-import { startTransport } from './transport.js';
-import { silentLogger } from '../logger.js';
+import { createMcpServer } from "./createMcpServer.js";
+import { startTransport } from "./transport.js";
+import { silentLogger } from "../logger.js";
 
 /**
  * Ces cas exercent le serveur par de VRAIES requêtes HTTP.
@@ -14,77 +14,95 @@ import { silentLogger } from '../logger.js';
  * les journaux annonçaient la route, et l'en-tête des refus désignait une
  * adresse qui n'existait pas. Aucun test unitaire ne pouvait le voir.
  */
-describe('transport http protégé', () => {
-  const RESSOURCE = 'http://127.0.0.1:19099/mcp';
+describe("transport http protégé", () => {
+  const RESSOURCE = "http://127.0.0.1:19099/mcp";
   let httpServer: Server;
   let base: string;
 
   before(async () => {
     const server = createMcpServer({
-      name: 'essai',
-      version: '0',
+      name: "essai",
+      version: "0",
       catalog: [],
       ctx: {
         gql: {} as never,
-        target: { url: 'http://x.test', host: 'x.test', isProd: false },
+        target: { url: "http://x.test", host: "x.test", isProd: false },
         allowWrites: false,
         logger: silentLogger,
       },
     });
 
     await startTransport(server, {
-      transport: 'http',
+      transport: "http",
       port: 19099,
       logger: silentLogger,
       resourceServer: {
         verifier: {
           async verifyAccessToken() {
-            throw new Error('aucun jeton n’est valide dans cet essai');
+            throw new Error("aucun jeton n’est valide dans cet essai");
           },
         },
-        requiredScopes: ['essai:scope'],
+        requiredScopes: ["essai:scope"],
         metadata: {
           resource: RESSOURCE,
-          authorizationServers: ['https://as.test/oauth'],
-          scopesSupported: ['essai:scope'],
+          authorizationServers: ["https://as.test/oauth"],
+          scopesSupported: ["essai:scope"],
         },
       },
     });
-    base = 'http://127.0.0.1:19099';
+    base = "http://127.0.0.1:19099";
   });
 
   after(() => httpServer?.close());
 
-  test('le document de découverte est servi, et PUBLIC', async () => {
+  // Les DEUX emplacements : le normatif, et la racine que le SDK cherche en
+  // repli. Ne servir que le second faisait dépendre la conformité du repli d'un
+  // client particulier.
+  test("le document de découverte est servi aux deux emplacements, et PUBLIC", async () => {
+    for (const chemin of [
+      "/.well-known/oauth-protected-resource/mcp",
+      "/.well-known/oauth-protected-resource",
+    ]) {
+      const rep = await fetch(`${base}${chemin}`);
+      assert.equal(rep.status, 200, `${chemin} devrait répondre 200`);
+      assert.equal(((await rep.json()) as any).resource, RESSOURCE);
+    }
+
     const r = await fetch(`${base}/.well-known/oauth-protected-resource`);
 
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.equal(d.resource, RESSOURCE);
-    assert.deepEqual(d.authorization_servers, ['https://as.test/oauth']);
+    assert.deepEqual(d.authorization_servers, ["https://as.test/oauth"]);
   });
 
-  test('/mcp sans jeton répond 401 et indique où s’authentifier', async () => {
+  test("/mcp sans jeton répond 401 et indique où s’authentifier", async () => {
     const r = await fetch(`${base}/mcp`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
     });
 
     assert.equal(r.status, 401);
-    const defi = r.headers.get('www-authenticate') ?? '';
+    const defi = r.headers.get("www-authenticate") ?? "";
     assert.match(defi, /Bearer/);
     // Ces deux mentions sont ce qui permet à un client de se débrouiller seul.
-    assert.match(defi, /resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource"/);
+    // L'adresse désigne l'emplacement NORMATIF (RFC 9728 §3.1), qui insère le
+    // well-known avant le chemin de la ressource — et non la racine, qui ne
+    // vaut que pour une ressource servie à `/`.
+    assert.match(
+      defi,
+      /resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"/,
+    );
     assert.match(defi, /scope="essai:scope"/);
   });
 
   // Le lien doit être suivable : c'est tout l'intérêt de l'annoncer.
-  test('l’adresse annoncée dans le refus mène bien au document', async () => {
-    const r = await fetch(`${base}/mcp`, { method: 'POST', body: '{}' });
-    const defi = r.headers.get('www-authenticate') ?? '';
+  test("l’adresse annoncée dans le refus mène bien au document", async () => {
+    const r = await fetch(`${base}/mcp`, { method: "POST", body: "{}" });
+    const defi = r.headers.get("www-authenticate") ?? "";
     const url = /resource_metadata="([^"]+)"/.exec(defi)?.[1];
-    assert.ok(url, 'aucune adresse annoncée');
+    assert.ok(url, "aucune adresse annoncée");
 
     const suivi = await fetch(url!);
     assert.equal(suivi.status, 200);
@@ -98,25 +116,25 @@ describe('transport http protégé', () => {
  * reste en 500, sans message ni journal. Le défaut ne se voit qu'au deuxième
  * appel — d'où ce cas, qui en enchaîne deux.
  */
-describe('transport http sans état', () => {
+describe("transport http sans état", () => {
   let httpServer: Server;
   let base: string;
 
   const initialize = (n: number) =>
     fetch(`${base}/mcp`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
       },
       body: JSON.stringify({
-        jsonrpc: '2.0',
+        jsonrpc: "2.0",
         id: n,
-        method: 'initialize',
+        method: "initialize",
         params: {
-          protocolVersion: '2024-11-05',
+          protocolVersion: "2024-11-05",
           capabilities: {},
-          clientInfo: { name: 'essai', version: '0' },
+          clientInfo: { name: "essai", version: "0" },
         },
       }),
     });
@@ -125,23 +143,23 @@ describe('transport http sans état', () => {
     // Une FABRIQUE : c'est ce qui permet un serveur neuf par requête.
     const fabrique = () =>
       createMcpServer({
-        name: 'essai',
-        version: '0',
+        name: "essai",
+        version: "0",
         catalog: [],
         ctx: {
           gql: {} as never,
-          target: { url: 'http://x.test', host: 'x.test', isProd: false },
+          target: { url: "http://x.test", host: "x.test", isProd: false },
           allowWrites: false,
           logger: silentLogger,
         },
       });
 
     httpServer = (await startTransport(fabrique, {
-      transport: 'http',
+      transport: "http",
       port: 19098,
       logger: silentLogger,
     }))!;
-    base = 'http://127.0.0.1:19098';
+    base = "http://127.0.0.1:19098";
   });
 
   after(async () => {
@@ -149,15 +167,19 @@ describe('transport http sans état', () => {
     await new Promise<void>((r) => httpServer.close(() => r()));
   });
 
-  test('deux requêtes successives aboutissent toutes les deux', async () => {
+  test("deux requêtes successives aboutissent toutes les deux", async () => {
     const premiere = await initialize(1);
-    assert.equal(premiere.status, 200, 'la première initialisation doit passer');
+    assert.equal(
+      premiere.status,
+      200,
+      "la première initialisation doit passer",
+    );
 
     const seconde = await initialize(2);
     assert.equal(
       seconde.status,
       200,
-      'la seconde échouait en 500 quand le transport était partagé',
+      "la seconde échouait en 500 quand le transport était partagé",
     );
   });
 });
