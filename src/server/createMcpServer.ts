@@ -1,9 +1,13 @@
 // src/server/createMcpServer.ts
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { ok, fail } from './contract.js';
-import { GraphQLCallError } from '../graphql/errors.js';
-import type { Appelant, ToolCatalog, ToolContext } from '../tools/defineTool.js';
+import { ok, fail } from "./contract.js";
+import { GraphQLCallError } from "../graphql/errors.js";
+import type {
+  Appelant,
+  ToolCatalog,
+  ToolContext,
+} from "../tools/defineTool.js";
 
 /**
  * Contexte des outils : une valeur fixe, ou une fabrique appelée à CHAQUE
@@ -26,7 +30,7 @@ export interface CreateServerOptions {
 
 /** Préfixe apposé en clair sur les outils écrivant en production : la seule
  *  chose que l'agent lit avant d'agir, c'est la description. */
-const PREFIXE_PROD = '[PRODUCTION] ';
+const PREFIXE_PROD = "[PRODUCTION] ";
 
 export function createMcpServer(opts: CreateServerOptions): McpServer {
   const { catalog } = opts;
@@ -35,11 +39,11 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
   const resoudreContexte = async (
     appelant: Appelant | undefined,
   ): Promise<ToolContext> =>
-    typeof opts.ctx === 'function' ? opts.ctx(appelant) : opts.ctx;
+    typeof opts.ctx === "function" ? opts.ctx(appelant) : opts.ctx;
 
   // La cible et l'interrupteur d'écriture ne dépendent pas de l'appelant : on
   // les lit une fois, pour décider des descriptions à l'enregistrement.
-  const ctx = typeof opts.ctx === 'function' ? undefined : opts.ctx;
+  const ctx = typeof opts.ctx === "function" ? undefined : opts.ctx;
 
   const noms = new Set<string>();
   for (const tool of catalog) {
@@ -49,7 +53,7 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
     noms.add(tool.name);
 
     const description =
-      ctx?.target.isProd && tool.requiresWrite
+      ctx?.target.isProd === true && tool.requiresWrite
         ? PREFIXE_PROD + tool.description
         : tool.description;
 
@@ -77,10 +81,10 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
 
         if (tool.requiresWrite && !contexte.allowWrites) {
           // Refus AVANT toute requête : rien ne part sur le réseau.
-          return fail('WRITES_DISABLED', {
+          return fail("WRITES_DISABLED", {
             tool: tool.name,
             target: contexte.target.url,
-            hint: 'Poser SUNNY_MCP_ALLOW_WRITES=true pour autoriser les écritures.',
+            hint: "Poser SUNNY_MCP_ALLOW_WRITES=true pour autoriser les écritures.",
           });
         }
 
@@ -91,14 +95,18 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
           return ok({
             ...(resultat as object),
             target: contexte.target.url,
-            is_prod: contexte.target.isProd,
+            // Omis quand la cible ne sait pas : mieux vaut ne rien dire que
+            // répondre « non » à côté de données de production.
+            ...(contexte.target.isProd === undefined
+              ? {}
+              : { is_prod: contexte.target.isProd }),
           });
         } catch (e: any) {
           contexte.logger.error(`${tool.name} : ${e?.message ?? e}`);
           if (e instanceof GraphQLCallError) {
             return fail(e.code, { ...(e.details as object), tool: tool.name });
           }
-          return fail(e?.code ?? 'TOOL_FAILED', {
+          return fail(e?.code ?? "TOOL_FAILED", {
             message: e?.message ?? String(e),
             tool: tool.name,
           });
