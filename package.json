@@ -1,6 +1,6 @@
 {
   "name": "@happykiller/sunny-mcp",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Socle MCP partagé : transport, session GraphQL, registre d'outils et garde-fous, pour exposer le back-office d'un produit aux agents.",
   "license": "ISC",
   "repository": {
