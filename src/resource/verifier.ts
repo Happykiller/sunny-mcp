@@ -8,6 +8,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthTokenVerifier } from '@modelcontextprotocol/sdk/server/auth/provider.js';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
 import type { Logger } from '../logger.js';
 import { silentLogger } from '../logger.js';
@@ -38,12 +39,28 @@ export function creerVerificateurJwks(
 
   return {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
-      const { payload } = await jwtVerify(token, jwks, {
-        issuer: opts.issuer,
-        // C'est LE contrôle qui compte. `jose` rejette le jeton si son `aud` ne
-        // contient pas cette valeur — donc si le jeton était destiné ailleurs.
-        audience: opts.resource,
-      });
+      // `jose` signale tout échec par une exception qui lui est propre :
+      // signature invalide, jeton illisible, expiration, audience étrangère.
+      // Le middleware du SDK ne sait traduire qu'`InvalidTokenError` en 401 ;
+      // toute autre exception ressort en 500, SANS en-tête `WWW-Authenticate`.
+      // La nuance n'est pas cosmétique : un client qui reçoit 500 conclut à une
+      // panne du serveur, là où un 401 lui dit de refaire son autorisation. Un
+      // jeton simplement expiré condamnerait donc la session au lieu de la
+      // renouveler.
+      let payload;
+      try {
+        ({ payload } = await jwtVerify(token, jwks, {
+          issuer: opts.issuer,
+          // C'est LE contrôle qui compte. `jose` rejette le jeton si son `aud`
+          // ne contient pas cette valeur — donc s'il était destiné ailleurs.
+          audience: opts.resource,
+        }));
+      } catch (erreur) {
+        const motif =
+          erreur instanceof Error ? erreur.message : 'jeton invalide';
+        logger.info(`jeton refusé — ${motif}`);
+        throw new InvalidTokenError(motif);
+      }
 
       const scopes = String(payload.scope ?? '')
         .split(' ')
